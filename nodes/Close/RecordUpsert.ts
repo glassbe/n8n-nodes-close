@@ -90,6 +90,19 @@ async function searchAll(
   );
 }
 
+/** Contacts/opportunities are bounded to one lead; the search API does not return opportunities. */
+async function scopedRecords(request: Request, resource: string, leadId: string): Promise<IDataObject[]> {
+  const records: IDataObject[] = [];
+  for (let page = 0; page < 1000; page++) {
+    const response = await request("GET", `/${resource}/?lead_id=${encodeURIComponent(leadId)}&_limit=100&_skip=${page * 100}`);
+    if (!Array.isArray(response.data)) throw new Error("Invalid Close list response");
+    records.push(...response.data as IDataObject[]);
+    if (!response.has_more) return records;
+    if (!response.data.length) throw new Error("Incomplete Close list response");
+  }
+  throw new Error("Close list exceeded pagination limit");
+}
+
 function conditionFor(type: string, value: unknown): IDataObject {
   if (type === "number") return { type: "number", value: value as number };
   if (type === "text")
@@ -248,52 +261,24 @@ export async function upsertRecord(
         if (!Number.isFinite(value))
           throw new Error(`${fieldName} requires a finite number`);
       }
-      const condition =
-        fieldName === "id" || fieldName.endsWith("_id")
-          ? { type: "term", values: [value] }
-          : conditionFor(
-              typeof value === "number"
-                ? "number"
-                : typeof value === "string"
-                  ? "text"
-                  : "other",
-              value,
-            );
-      predicate = {
-        type: "field_condition",
-        field: {
-          type: "regular_field",
-          object_type: target,
-          field_name: fieldName,
-        },
-        condition,
-      } as IDataObject;
+      // Only use documented indexed fields. Other fields are compared exactly
+      // after fetching candidates rather than inventing unsupported API filters.
+      const indexedName = target === "lead" && fieldName === "name" ? "display_name" : fieldName;
+      if (fieldName === "id") {
+        predicate = { type: "id", value: String(value) };
+      } else if (target === "lead" && fieldName === "status_id") {
+        predicate = { type: "field_condition", field: { type: "regular_field", object_type: target, field_name: fieldName }, condition: { type: "reference", reference_type: "lead_status", object_ids: [value] } };
+      } else if (["description", "display_name", "title"].includes(indexedName)) {
+        predicate = { type: "field_condition", field: { type: "regular_field", object_type: target, field_name: indexedName }, condition: conditionFor(typeof value === "number" ? "number" : "text", value) };
+      } else {
+        predicate = { type: "object_type", object_type: target };
+      }
     }
     effectiveKeys.push({ field: key.field, value });
     const queries: IDataObject[] = [
       { type: "object_type", object_type: target },
       predicate,
     ];
-    if (input.resource !== "lead")
-      queries.push({
-        type: "field_condition",
-        field: {
-          type: "regular_field",
-          object_type: target,
-          field_name: "lead_id",
-        },
-        condition: { type: "term", values: [input.leadId!] },
-      });
-    if (input.resource === "opportunity")
-      queries.push({
-        type: "field_condition",
-        field: {
-          type: "regular_field",
-          object_type: target,
-          field_name: "pipeline_id",
-        },
-        condition: { type: "term", values: [input.pipelineId!] },
-      });
     const fields = [
       ...new Set([
         "id",
@@ -301,11 +286,10 @@ export async function upsertRecord(
         ...(target === "contact" ? ["lead_id"] : []),
       ]),
     ];
-    const candidates = await searchAll(
-      request,
-      { type: "and", queries },
-      { [target]: fields },
-    );
+    const candidates = input.resource === "lead"
+      ? await searchAll(request, { type: "and", queries }, { [target]: fields })
+      : (await scopedRecords(request, input.resource, input.leadId!)).filter(record =>
+          record.lead_id === input.leadId && (input.resource !== "opportunity" || record.pipeline_id === input.pipelineId));
     const matches = candidates.filter((record) => {
       const candidate = record[readField];
       if (fieldName === "email")
