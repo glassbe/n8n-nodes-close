@@ -184,3 +184,16 @@ same field in one operation raises an error rather than silently choosing a valu
 For Custom Activities, select the Activity Type to load its available fields.
 
 Contributor check: `npm run build && node --test test/*.test.cjs`.
+
+### Dynamic and multi-value custom field updates
+
+Lead, Contact, Opportunity and Custom Activity **Update** now accept:
+
+- **Custom Field Values (JSON)**: an object keyed by `cf_...` or `custom.cf_...`. Fields are checked against the selected resource schema. `null` explicitly clears a field; numeric zero, empty text and empty arrays are not silently omitted. Existing mapper omission rules remain unchanged.
+- **Multi-Value Field Changes**: choose a multi-value field and Add, Remove or Replace. Choice and user fields offer value dropdowns; JSON arrays support other types and expressions. Add preserves existing values and avoids duplicates. Remove preserves other values. Replace sets the supplied array, including an empty array.
+
+Each field may appear in only one of the mapper, explicit clear list, JSON object or multi-value changes. Conflicts fail before the update request. Custom Activity updates use the actual record's activity type to validate dynamic changes. Add/Remove read the current record and then write the resulting array; they are not atomic against concurrent writers.
+
+The normal Create/Update custom-field mapper now loads user choices and represents multi-value fields as arrays. Use Multi-Value Field Changes on Update for interactive choice/user multi-selection. Date-only fields use a string input (`YYYY-MM-DD`). Existing field IDs are retained.
+
+Run all focused tests: `npm run build && node --test test/*.test.cjs`.

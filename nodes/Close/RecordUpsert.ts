@@ -96,7 +96,7 @@ function conditionFor(type: string, value: unknown): IDataObject {
     return { type: "text", mode: "phrase", value: String(value) };
   return { type: "exists" }; // Other scalar/array types are compared exactly after fetching candidates.
 }
-function validateFieldValue(field: FieldDefinition, value: unknown): void {
+export function validateFieldValue(field: FieldDefinition, value: unknown): void {
   if (field.accepts_multiple_values) {
     if (!Array.isArray(value))
       throw new Error(`${field.name} requires an array`);
