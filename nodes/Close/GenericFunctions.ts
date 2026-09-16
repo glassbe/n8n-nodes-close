@@ -31,7 +31,9 @@ export async function closeApiRequest(
 	endpoint: string,
 	body: IDataObject = {},
 	qs: IDataObject = {},
+ requestOptions: {timeout?: number} = {},
 ): Promise<any> { // eslint-disable-line @typescript-eslint/no-explicit-any
+	const nodeTimeout = 'getInputData' in this ? this.getNodeParameter('requestTimeout', 0, 300000) as number : undefined;
 	const options: IHttpRequestOptions = {
 		method,
 		url: `https://api.close.com/api/v1${endpoint}`,
@@ -40,6 +42,8 @@ export async function closeApiRequest(
 			'Content-Type': 'application/json',
 		},
 		json: true,
+		...(nodeTimeout ? { timeout: nodeTimeout } : {}),
+		...requestOptions,
 	};
 
 	if (Object.keys(body).length > 0) {

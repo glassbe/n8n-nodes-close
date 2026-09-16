@@ -12,7 +12,7 @@ function harness(
     request: async (method, path, body) => {
       calls.push({ method, path, body });
       if (path.startsWith("/custom_field_schema/")) return { fields };
-      if (path === "/data/search/") {
+      if (path === "/data/search/" || path.includes("?_" ) || path.includes("?lead_id=")) {
         const page = pages.shift();
         if (page instanceof Error) throw page;
         return page || { data: [] };
@@ -213,14 +213,14 @@ test("contact and opportunity matches are scoped and scope is rechecked after lo
     matchKeys: [{ field: "value", value: "0" }],
     values: { note: "Updated" },
   });
-  const h = harness([{ data: [{ id: "oppo_1", value: 0 }] }], {
+  const h = harness([{ data: [{ id: "oppo_1", value: 0, lead_id: "lead_1", pipeline_id: "pipe_1" }] }], {
     id: "oppo_1",
     lead_id: "lead_1",
     pipeline_id: "pipe_1",
   });
   assert.equal((await upsertRecord(h.request, args)).id, "oppo_1");
-  assert.equal(h.calls[0].body.query.queries.length, 4);
-  const h2 = harness([{ data: [{ id: "oppo_1", value: 0 }] }], {
+  assert.equal(h.calls[0].path, "/opportunity/?lead_id=lead_1&_limit=100&_skip=0");
+  const h2 = harness([{ data: [{ id: "oppo_1", value: 0, lead_id: "lead_1", pipeline_id: "pipe_1" }] }], {
     id: "oppo_1",
     lead_id: "lead_2",
     pipeline_id: "pipe_1",
@@ -334,3 +334,11 @@ test("return-all policy emits full records without writes and retains input pair
     generic.closeApiRequest = original;
   }
 });
+
+ test("IDs use Close ID queries and lead names use display_name candidates", async () => {
+ const h = harness([{data:[{id:"lead_1"}]}]);
+ await upsertRecord(h.request,input({matchKeys:[{field:"id",value:"lead_1"}]}));
+ assert.deepEqual(h.calls[0].body.query.queries[1],{type:"id",value:"lead_1"});
+ const names = harness([{data:[{id:"lead_1",name:"Old"}]}]); await upsertRecord(names.request,input());
+ assert.equal(names.calls[0].body.query.queries[1].field.field_name,"display_name");
+ });

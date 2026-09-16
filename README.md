@@ -167,7 +167,7 @@ Email matching ignores case and surrounding whitespace. Phone matching requires 
 
 Output contains `action`, `matchedBy`, `matchTrace`, `preview` and `id`, plus `patch` for preview or `record` after execution. Preview action names describe the proposed action.
 
-This is a client-side search followed by create/update, **not an atomic uniqueness guarantee**. Concurrent executions or Close search-index delay can still create duplicates. Serialize writes for the same identity and account for indexing delay before retries. Some non-text custom field searches fetch all records where that field exists before comparing exact values, which may be expensive on large accounts. No customer-specific IDs or business rules are embedded.
+This is a client-side search followed by create/update, **not an atomic uniqueness guarantee**. Concurrent executions or Close search-index delay can still create duplicates. Serialize writes for the same identity and account for indexing delay before retries. Contacts and opportunities are listed within the selected lead and compared exactly; opportunities are additionally filtered by pipeline. Lead names use Close display-name candidates, then compare the stored name exactly. Non-indexed standard fields and some non-text custom fields require broader candidate scans, which may be expensive on large accounts. No customer-specific IDs or business rules are embedded.
 
 Run focused tests with `npm run build && node --test test/record-upsert.test.cjs`.
 
@@ -184,3 +184,22 @@ same field in one operation raises an error rather than silently choosing a valu
 For Custom Activities, select the Activity Type to load its available fields.
 
 Contributor check: `npm run build && node --test test/*.test.cjs`.
+
+### Dynamic and multi-value custom field updates
+
+Lead, Contact, Opportunity and Custom Activity **Update** now accept:
+
+- **Custom Field Values (JSON)**: an object keyed by `cf_...` or `custom.cf_...`. Fields are checked against the selected resource schema. `null` explicitly clears a field; numeric zero, empty text and empty arrays are not silently omitted. Existing mapper omission rules remain unchanged.
+- **Multi-Value Field Changes**: choose a multi-value field and Add, Remove or Replace. Choice and user fields offer value dropdowns; JSON arrays support other types and expressions. Add preserves existing values and avoids duplicates. Remove preserves other values. Replace sets the supplied array, including an empty array.
+
+Each field may appear in only one of the mapper, explicit clear list, JSON object or multi-value changes. Conflicts fail before the update request. Custom Activity updates use the actual record's activity type to validate dynamic changes. Add/Remove read the current record and then write the resulting array; they are not atomic against concurrent writers.
+
+The normal Create/Update custom-field mapper now loads user choices and represents multi-value fields as arrays. Use Multi-Value Field Changes on Update for interactive choice/user multi-selection. Date-only fields use a string input (`YYYY-MM-DD`). Existing field IDs are retained.
+
+Run all focused tests: `npm run build && node --test test/*.test.cjs`.
+
+### API Request
+
+Use **API Request / Request** for Close endpoints or dynamic payloads not represented by a dedicated operation. It shares the Close credential and retry handling. GET, POST, PUT and DELETE accept a Close API path (or a full Close API URL), query parameters and a JSON object body. Explicit `null`, zero and false are preserved. Hosts outside `https://api.close.com/api/v1/` are rejected. The response body is returned unchanged; top-level arrays become individual n8n items. Timeout is configurable in milliseconds for all operations.
+
+This is a transport escape hatch, not a place for business rules. Prefer dedicated operations and field selectors when they cover the intended action.

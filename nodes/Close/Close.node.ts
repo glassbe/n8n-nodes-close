@@ -14,9 +14,12 @@ import {
 		ResourceMapperFields,
 		ResourceMapperField,
 	} from 'n8n-workflow';
+import { apiRequestProperties, executeApiRequest } from './ApiRequest';
 import { closeApiRequest, closeApiRequestAllItems } from './GenericFunctions';
 import { upsertRecord, standardFields, type MatchKey, type UpsertResource } from './RecordUpsert';
 import { upsertProperties } from './RecordUpsertDescription';
+import { applyCustomFieldUpdates } from './CustomFieldUpdates';
+import { customFieldUpdateProperties } from './CustomFieldUpdatesDescription';
 import { applyCustomFieldClears } from './CustomFieldClearing';
 
 
@@ -70,6 +73,18 @@ function buildResourceMapperFields(fields: IDataObject[]): ResourceMapperFields 
 		return field;
 	});
 	return { fields: mapperFields };
+}
+
+async function enrichCustomFieldMapper(context: ILoadOptionsFunctions, definitions: IDataObject[]): Promise<ResourceMapperFields> {
+ const mapped=buildResourceMapperFields(definitions);
+ const users=definitions.some(f=>f.type==='user') ? await closeApiRequestAllItems.call(context,'GET','/user/') : [];
+ for (let i=0;i<mapped.fields.length;i++) {
+  const field=mapped.fields[i], definition=definitions[i];
+  if (definition.accepts_multiple_values) { field.type='array'; delete field.options; }
+  else if (definition.type==='user') { field.type='options'; field.options=users.map((u: IDataObject)=>({name: String(u.first_name || '')+' '+String(u.last_name || ''),value:String(u.id)})); }
+  else if (definition.type==='date') field.type='string';
+ }
+ return mapped;
 }
 
 // ─── Helper: merge shared custom fields for a given object type ───────────────
@@ -133,7 +148,6 @@ export class Close implements INodeType {
 			},
 		],
 		properties: [
-			...upsertProperties,
 			// ─── RESOURCE SELECTOR ───────────────────────────────────────────────────
 			{
 				displayName: 'Resource',
@@ -141,6 +155,7 @@ export class Close implements INodeType {
 				type: 'options',
 				noDataExpression: true,
 				options: [
+					{ name: 'API Request', value: 'apiRequest' },
 					{ name: 'Call', value: 'call' },
 					{ name: 'Comment', value: 'comment' },
 					{ name: 'Contact', value: 'contact' },
@@ -2237,12 +2252,36 @@ export class Close implements INodeType {
 					typeOptions: { minValue: 1, maxValue: 1000 },
 					displayOptions: { show: { resource: ['integrationLink'], operation: ['getAll'], returnAll: [false] } },
 				},
+			...apiRequestProperties,
+			...upsertProperties,
+			...customFieldUpdateProperties,
 			],
 			usableAsTool: true,
 	};
 
 	methods = {
 		loadOptions: {
+            async getMultiValueCustomFields(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+                const resource=this.getCurrentNodeParameter('resource') as string;
+                const type=resource==='customActivity' ? `activity/${encodeURIComponent(String(this.getCurrentNodeParameter('activityTypeId') || ''))}` : resource;
+                if (type==='activity/') return [];
+                const schema=await closeApiRequest.call(this,'GET',`/custom_field_schema/${type}/`);
+                if (!Array.isArray(schema.fields)) throw new NodeOperationError(this.getNode(), 'Invalid Close custom field schema');
+                return schema.fields.filter((f: IDataObject)=>f.accepts_multiple_values).map((f: IDataObject)=>({name:String(f.name),value:String(f.id)}));
+            },
+            async getMultiValueCustomFieldOptions(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+                const resource=this.getCurrentNodeParameter('resource') as string;
+                const fieldId=this.getCurrentNodeParameter('&field') as string;
+                if (!fieldId) return [];
+                const type=resource==='customActivity' ? `activity/${encodeURIComponent(String(this.getCurrentNodeParameter('activityTypeId') || ''))}` : resource;
+                const schema=await closeApiRequest.call(this,'GET',`/custom_field_schema/${type}/`);
+                if (!Array.isArray(schema.fields)) throw new NodeOperationError(this.getNode(), 'Invalid Close custom field schema');
+                const field=schema.fields.find((f: IDataObject)=>f.id===fieldId);
+                if (!field) throw new NodeOperationError(this.getNode(), 'Select a valid custom field');
+                if (field.type==='user') return (await closeApiRequestAllItems.call(this,'GET','/user/')).map((u: IDataObject)=>({name:String(u.first_name || '')+' '+String(u.last_name || ''),value:String(u.id)}));
+                return (field.choices || []).map((value: string)=>({name:value,value}));
+            },
+
 			async getUpsertMatchFields(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
 				const resource = this.getCurrentNodeParameter('resource') as UpsertResource;
 				const schema = await closeApiRequest.call(this, 'GET', `/custom_field_schema/${resource}/`);
@@ -2419,7 +2458,7 @@ export class Close implements INodeType {
 					]);
 					const leadFields = leadResp.data || [];
 					const sharedForLead = filterSharedFields(sharedResp.data || [], 'lead');
-					return buildResourceMapperFields([...leadFields, ...sharedForLead]);
+					return enrichCustomFieldMapper(this, [...leadFields, ...sharedForLead]);
 				},
 				async getContactCustomFieldsForMapper(this: ILoadOptionsFunctions): Promise<ResourceMapperFields> {
 					const [contactResp, sharedResp] = await Promise.all([
@@ -2428,7 +2467,7 @@ export class Close implements INodeType {
 					]);
 					const contactFields = contactResp.data || [];
 					const sharedForContact = filterSharedFields(sharedResp.data || [], 'contact');
-					return buildResourceMapperFields([...contactFields, ...sharedForContact]);
+					return enrichCustomFieldMapper(this, [...contactFields, ...sharedForContact]);
 				},
 				async getOpportunityCustomFieldsForMapper(this: ILoadOptionsFunctions): Promise<ResourceMapperFields> {
 					const [oppResp, sharedResp] = await Promise.all([
@@ -2437,7 +2476,7 @@ export class Close implements INodeType {
 					]);
 					const oppFields = oppResp.data || [];
 					const sharedForOpp = filterSharedFields(sharedResp.data || [], 'opportunity');
-					return buildResourceMapperFields([...oppFields, ...sharedForOpp]);
+					return enrichCustomFieldMapper(this, [...oppFields, ...sharedForOpp]);
 				},
 				async getCustomActivityCustomFieldsForMapper(this: ILoadOptionsFunctions): Promise<ResourceMapperFields> {
 					const activityTypeId = this.getCurrentNodeParameter('activityTypeId', { extractValue: true }) as string | undefined;
@@ -2452,7 +2491,7 @@ export class Close implements INodeType {
 					const fields = [...typeFields, ...sharedFields].filter((field, index, allFields) =>
 						allFields.findIndex((candidate) => candidate.id === field.id) === index,
 					);
-					return buildResourceMapperFields(fields);
+					return enrichCustomFieldMapper(this, fields);
 				},
 			},
 	};
@@ -2467,6 +2506,11 @@ export class Close implements INodeType {
 			try {
 				let responseData: IDataObject | IDataObject[] = [];
 
+				if (resource === 'apiRequest') {
+					const result = await executeApiRequest.call(this, i);
+					for (const row of Array.isArray(result) ? result : [result]) returnData.push({json: row, pairedItem: {item:i}});
+					continue;
+				}
 				if (operation === 'upsertByFields') {
 					const keys = this.getNodeParameter('upsertMatchKeys', i, {}) as { keys?: MatchKey[] };
 					const mapper = this.getNodeParameter('upsertValues', i, {}) as IDataObject;
@@ -2602,6 +2646,7 @@ export class Close implements INodeType {
 												}
 											}
 					applyCustomFieldClears(body, this.getNodeParameter('customFieldsToClear', i, []) as string[]);
+					await applyCustomFieldUpdates.call(this, body, i, `/lead/${leadId}/`);
 					responseData = await closeApiRequest.call(this, 'PUT', `/lead/${leadId}/`, body);
 					} else if (operation === 'delete') {
 						const leadId = this.getNodeParameter('leadId', i) as string;
@@ -2741,6 +2786,7 @@ export class Close implements INodeType {
 												}
 											}
 					applyCustomFieldClears(body, this.getNodeParameter('customFieldsToClear', i, []) as string[]);
+					await applyCustomFieldUpdates.call(this, body, i, `/contact/${contactId}/`);
 					responseData = await closeApiRequest.call(this, 'PUT', `/contact/${contactId}/`, body);
 					} else if (operation === 'delete') {
 						const contactId = this.getNodeParameter('contactId', i) as string;
@@ -2810,6 +2856,7 @@ export class Close implements INodeType {
 						}
 					}
 				applyCustomFieldClears(updBody, this.getNodeParameter('customFieldsToClear', i, []) as string[]);
+					await applyCustomFieldUpdates.call(this, updBody, i, `/opportunity/${opportunityId}/`);
 					responseData = await closeApiRequest.call(this, 'PUT', `/opportunity/${opportunityId}/`, updBody);
 					} else if (operation === 'upsert') {
 						const leadId = this.getNodeParameter('leadId', i) as string;
@@ -3247,6 +3294,7 @@ export class Close implements INodeType {
 							}
 						}
 						applyCustomFieldClears(body, this.getNodeParameter('customFieldsToClear', i, []) as string[]);
+					await applyCustomFieldUpdates.call(this, body, i, `/activity/custom/${id}/`);
 					responseData = await closeApiRequest.call(this, 'PUT', `/activity/custom/${id}/`, body);
 					} else if (operation === 'delete') {
 						const id = this.getNodeParameter('customActivityId', i) as string;
