@@ -17,6 +17,7 @@ import {
 import { closeApiRequest, closeApiRequestAllItems } from './GenericFunctions';
 import { upsertRecord, standardFields, type MatchKey, type UpsertResource } from './RecordUpsert';
 import { upsertProperties } from './RecordUpsertDescription';
+import { applyCustomFieldClears } from './CustomFieldClearing';
 
 
 // ─── Helper: build ResourceMapperFields from Close CRM custom field list ─────
@@ -1608,6 +1609,19 @@ export class Close implements INodeType {
 						},
 					},
 				},
+			{
+				displayName: 'Custom Fields to Clear',
+				name: 'customFieldsToClear',
+				type: 'multiOptions',
+				default: [],
+				displayOptions: { show: { resource: ['lead', 'contact', 'opportunity', 'customActivity'], operation: ['update'] } },
+				typeOptions: {
+					loadOptionsMethod: 'getCustomFieldsToClear',
+					loadOptionsDependsOn: ['resource', 'activityTypeId'],
+				},
+				description: 'Choose from the list, or specify IDs using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
+			},
+
 			// ─── CUSTOM ACTIVITY TYPE ─────────────────────────────────────────────────
 			{
 				displayName: 'Operation',
@@ -2246,6 +2260,21 @@ export class Close implements INodeType {
 				return options;
 			},
 
+			async getCustomFieldsToClear(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+				const resource = this.getCurrentNodeParameter('resource') as string;
+				let schemaType = resource;
+				if (resource === 'customActivity') {
+					const activityTypeId = this.getCurrentNodeParameter('activityTypeId') as string;
+					if (!activityTypeId) return [];
+					schemaType = `activity/${encodeURIComponent(activityTypeId)}`;
+				}
+				const schema = await closeApiRequest.call(this, 'GET', `/custom_field_schema/${schemaType}/`);
+				return ((schema.fields || []) as IDataObject[]).map((field) => ({
+					name: field.name as string,
+					value: field.id as string,
+				}));
+			},
+
 			async getLeadStatuses(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
 				const response = await closeApiRequest.call(this, 'GET', '/status/lead/');
 				return (response.data || []).map((s: IDataObject) => ({
@@ -2572,6 +2601,7 @@ export class Close implements INodeType {
 													body[`custom.${k}`] = v;
 												}
 											}
+					applyCustomFieldClears(body, this.getNodeParameter('customFieldsToClear', i, []) as string[]);
 					responseData = await closeApiRequest.call(this, 'PUT', `/lead/${leadId}/`, body);
 					} else if (operation === 'delete') {
 						const leadId = this.getNodeParameter('leadId', i) as string;
@@ -2710,6 +2740,7 @@ export class Close implements INodeType {
 													body[`custom.${k}`] = v;
 												}
 											}
+					applyCustomFieldClears(body, this.getNodeParameter('customFieldsToClear', i, []) as string[]);
 					responseData = await closeApiRequest.call(this, 'PUT', `/contact/${contactId}/`, body);
 					} else if (operation === 'delete') {
 						const contactId = this.getNodeParameter('contactId', i) as string;
@@ -2778,7 +2809,8 @@ export class Close implements INodeType {
 							updBody[`custom.${fieldId}`] = value;
 						}
 					}
-				responseData = await closeApiRequest.call(this, 'PUT', `/opportunity/${opportunityId}/`, updBody);
+				applyCustomFieldClears(updBody, this.getNodeParameter('customFieldsToClear', i, []) as string[]);
+					responseData = await closeApiRequest.call(this, 'PUT', `/opportunity/${opportunityId}/`, updBody);
 					} else if (operation === 'upsert') {
 						const leadId = this.getNodeParameter('leadId', i) as string;
 						const pipelineId = this.getNodeParameter('pipelineId', i) as string;
@@ -3214,7 +3246,8 @@ export class Close implements INodeType {
 								body[`custom.${k}`] = v;
 							}
 						}
-						responseData = await closeApiRequest.call(this, 'PUT', `/activity/custom/${id}/`, body);
+						applyCustomFieldClears(body, this.getNodeParameter('customFieldsToClear', i, []) as string[]);
+					responseData = await closeApiRequest.call(this, 'PUT', `/activity/custom/${id}/`, body);
 					} else if (operation === 'delete') {
 						const id = this.getNodeParameter('customActivityId', i) as string;
 						await closeApiRequest.call(this, 'DELETE', `/activity/custom/${id}/`);

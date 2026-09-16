@@ -170,3 +170,17 @@ Output contains `action`, `matchedBy`, `matchTrace`, `preview` and `id`, plus `p
 This is a client-side search followed by create/update, **not an atomic uniqueness guarantee**. Concurrent executions or Close search-index delay can still create duplicates. Serialize writes for the same identity and account for indexing delay before retries. Some non-text custom field searches fetch all records where that field exists before comparing exact values, which may be expensive on large accounts. No customer-specific IDs or business rules are embedded.
 
 Run focused tests with `npm run build && node --test test/record-upsert.test.cjs`.
+
+### Explicitly clear custom fields
+
+Lead, Contact, Opportunity and Custom Activity **Update** operations include
+**Custom Fields to Clear**. Select fields by name (or provide field IDs with an
+expression) to send explicit `null` values to Close. This clears the stored value;
+it does not delete the field definition.
+
+Unselected fields remain unchanged. The existing Custom Fields mapper still skips
+empty values, so existing workflows keep their behavior. Setting and clearing the
+same field in one operation raises an error rather than silently choosing a value.
+For Custom Activities, select the Activity Type to load its available fields.
+
+Contributor check: `npm run build && node --test test/*.test.cjs`.
