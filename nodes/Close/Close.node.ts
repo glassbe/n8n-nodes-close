@@ -14,6 +14,7 @@ import {
 		ResourceMapperFields,
 		ResourceMapperField,
 	} from 'n8n-workflow';
+import { apiRequestProperties, executeApiRequest } from './ApiRequest';
 import { closeApiRequest, closeApiRequestAllItems } from './GenericFunctions';
 import { upsertRecord, standardFields, type MatchKey, type UpsertResource } from './RecordUpsert';
 import { upsertProperties } from './RecordUpsertDescription';
@@ -147,8 +148,6 @@ export class Close implements INodeType {
 			},
 		],
 		properties: [
-			...upsertProperties,
-			...customFieldUpdateProperties,
 			// ─── RESOURCE SELECTOR ───────────────────────────────────────────────────
 			{
 				displayName: 'Resource',
@@ -156,6 +155,7 @@ export class Close implements INodeType {
 				type: 'options',
 				noDataExpression: true,
 				options: [
+					{ name: 'API Request', value: 'apiRequest' },
 					{ name: 'Call', value: 'call' },
 					{ name: 'Comment', value: 'comment' },
 					{ name: 'Contact', value: 'contact' },
@@ -2252,6 +2252,9 @@ export class Close implements INodeType {
 					typeOptions: { minValue: 1, maxValue: 1000 },
 					displayOptions: { show: { resource: ['integrationLink'], operation: ['getAll'], returnAll: [false] } },
 				},
+			...apiRequestProperties,
+			...upsertProperties,
+			...customFieldUpdateProperties,
 			],
 			usableAsTool: true,
 	};
@@ -2503,6 +2506,11 @@ export class Close implements INodeType {
 			try {
 				let responseData: IDataObject | IDataObject[] = [];
 
+				if (resource === 'apiRequest') {
+					const result = await executeApiRequest.call(this, i);
+					for (const row of Array.isArray(result) ? result : [result]) returnData.push({json: row, pairedItem: {item:i}});
+					continue;
+				}
 				if (operation === 'upsertByFields') {
 					const keys = this.getNodeParameter('upsertMatchKeys', i, {}) as { keys?: MatchKey[] };
 					const mapper = this.getNodeParameter('upsertValues', i, {}) as IDataObject;
